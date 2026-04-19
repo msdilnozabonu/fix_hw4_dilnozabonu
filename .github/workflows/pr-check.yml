@@ -1,0 +1,209 @@
+name: Pull Request Check
+
+on:
+  pull_request:
+    branches: [ main, master ]
+    types: [opened, synchronize, reopened]
+
+jobs:
+  check-tests:
+    name: Validate Homework Solution
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Check code formatting
+      run: |
+        if [ -n "$(gofmt -l .)" ]; then
+          echo "❌ Code is not formatted. Please run 'go fmt ./...'"
+          gofmt -d .
+          exit 1
+        fi
+        echo "✅ Code formatting is correct"
+
+    - name: Run all tests with coverage
+      id: test_all
+      run: |
+        set +e
+        go test -v -coverprofile=coverage.out ./... > test_output.txt 2>&1
+        TEST_EXIT_CODE=$?
+        cat test_output.txt
+
+        if [ $TEST_EXIT_CODE -eq 0 ]; then
+          echo "test_status=passed" >> $GITHUB_OUTPUT
+        else
+          echo "test_status=failed" >> $GITHUB_OUTPUT
+        fi
+
+        exit 0
+
+    - name: Generate coverage report
+      if: always()
+      run: |
+        go tool cover -func=coverage.out | tee coverage_report.txt
+        COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}')
+        echo "Total coverage: $COVERAGE"
+        echo "coverage=$COVERAGE" >> $GITHUB_ENV
+
+    - name: Check required tests individually
+      id: check_required
+      run: |
+        echo "## Checking Required Tests" | tee test_check.txt
+        echo "" | tee -a test_check.txt
+
+        # Required tests that must pass
+        declare -a required_tests=(
+          "ExampleCalculate"
+          "ExampleCalculate_negative"
+          "ExampleCalculate_zero"
+          "ExampleConverter"
+          "ExampleConverter_tiin"
+        )
+
+        # Additional tests for bonus points
+        declare -a bonus_tests=(
+          "ExampleCalculate_large_amount"
+          "ExampleCalculate_with_tiyin"
+          "ExampleConverter_small_price"
+          "ExampleConverter_small_price_with_tiin"
+          "ExampleConverter_million_exact"
+          "ExampleConverter_under_thousand"
+          "ExampleConverter_one_tiyin"
+          "ExampleConverter_large_number"
+          "TestCalculate_various_amounts"
+          "TestCalculate_rounding"
+          "TestConverter_edge_cases"
+        )
+
+        all_required_pass=true
+        required_passed=0
+        required_total=${#required_tests[@]}
+
+        echo "### Required Tests (Must Pass):" | tee -a test_check.txt
+        for test in "${required_tests[@]}"; do
+          if go test -run "^${test}$" ./... > /dev/null 2>&1; then
+            echo "✅ $test - PASSED" | tee -a test_check.txt
+            ((required_passed++))
+          else
+            echo "❌ $test - FAILED" | tee -a test_check.txt
+            all_required_pass=false
+          fi
+        done
+
+        echo "" | tee -a test_check.txt
+        echo "### Bonus Tests (Optional):" | tee -a test_check.txt
+        bonus_passed=0
+        bonus_total=${#bonus_tests[@]}
+
+        for test in "${bonus_tests[@]}"; do
+          if go test -run "^${test}" ./... > /dev/null 2>&1; then
+            echo "✅ $test - PASSED" | tee -a test_check.txt
+            ((bonus_passed++))
+          else
+            echo "⚠️ $test - NOT IMPLEMENTED" | tee -a test_check.txt
+          fi
+        done
+
+        echo "" | tee -a test_check.txt
+        echo "### Summary:" | tee -a test_check.txt
+        echo "Required tests: $required_passed/$required_total passed" | tee -a test_check.txt
+        echo "Bonus tests: $bonus_passed/$bonus_total passed" | tee -a test_check.txt
+
+        # Calculate grade
+        if [ "$all_required_pass" = true ]; then
+          grade="PASS"
+          if [ $bonus_passed -ge 8 ]; then
+            grade="EXCELLENT"
+          elif [ $bonus_passed -ge 5 ]; then
+            grade="VERY GOOD"
+          elif [ $bonus_passed -ge 2 ]; then
+            grade="GOOD"
+          fi
+        else
+          grade="FAIL"
+        fi
+
+        echo "Grade: $grade" | tee -a test_check.txt
+
+        echo "required_passed=$required_passed" >> $GITHUB_OUTPUT
+        echo "required_total=$required_total" >> $GITHUB_OUTPUT
+        echo "bonus_passed=$bonus_passed" >> $GITHUB_OUTPUT
+        echo "bonus_total=$bonus_total" >> $GITHUB_OUTPUT
+        echo "grade=$grade" >> $GITHUB_OUTPUT
+
+        if [ "$all_required_pass" = false ]; then
+          exit 1
+        fi
+
+    - name: Comment PR with results
+      if: always()
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const testOutput = fs.readFileSync('test_check.txt', 'utf8');
+          const coverage = process.env.coverage || 'N/A';
+          const grade = '${{ steps.check_required.outputs.grade }}' || 'UNKNOWN';
+
+          const gradeEmoji = {
+            'EXCELLENT': '🌟',
+            'VERY GOOD': '🎉',
+            'GOOD': '✨',
+            'PASS': '✅',
+            'FAIL': '❌',
+            'UNKNOWN': '❓'
+          };
+
+          const comment = `## ${gradeEmoji[grade]} Homework Check Results
+
+          ${testOutput}
+
+          **Code Coverage:** ${coverage}
+
+          ---
+
+          ### Grading Criteria:
+          - **PASS** ✅: All required tests pass
+          - **GOOD** ✨: All required + 2-4 bonus tests
+          - **VERY GOOD** 🎉: All required + 5-7 bonus tests
+          - **EXCELLENT** 🌟: All required + 8+ bonus tests
+          - **FAIL** ❌: Not all required tests pass
+
+          ${grade === 'FAIL' ? '⚠️ **Please fix the failing required tests before submitting!**' : ''}
+          `;
+
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          });
+
+    - name: Set final status
+      if: always()
+      run: |
+        if [ "${{ steps.check_required.outputs.grade }}" = "FAIL" ]; then
+          echo "❌ Not all required tests are passing"
+          exit 1
+        else
+          echo "✅ All required tests are passing!"
+          echo "Grade: ${{ steps.check_required.outputs.grade }}"
+        fi

@@ -1,0 +1,86 @@
+name: Test Homework
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Run tests
+      run: |
+        go test -v -cover ./... -json | tee test-results.json
+
+    - name: Generate test summary
+      if: always()
+      run: |
+        echo "## Test Results Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        if go test ./... > /dev/null 2>&1; then
+          echo "✅ **All tests passed!**" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ **Some tests failed**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Failed Tests:" >> $GITHUB_STEP_SUMMARY
+          go test ./... -v 2>&1 | grep -E "FAIL|---" | head -20 >> $GITHUB_STEP_SUMMARY || true
+        fi
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Coverage:" >> $GITHUB_STEP_SUMMARY
+        go test -cover ./... 2>&1 | grep -E "coverage:" >> $GITHUB_STEP_SUMMARY || true
+
+    - name: Check specific test requirements
+      run: |
+        echo "Checking required tests..."
+
+        # List of required tests
+        required_tests=(
+          "ExampleCalculate"
+          "ExampleCalculate_negative"
+          "ExampleCalculate_zero"
+          "ExampleConverter"
+          "ExampleConverter_tiin"
+        )
+
+        all_passed=true
+
+        for test in "${required_tests[@]}"; do
+          if go test -run "^${test}$" ./... > /dev/null 2>&1; then
+            echo "✅ $test passed"
+          else
+            echo "❌ $test failed"
+            all_passed=false
+          fi
+        done
+
+        if [ "$all_passed" = false ]; then
+          echo ""
+          echo "❌ Not all required tests are passing"
+          exit 1
+        else
+          echo ""
+          echo "✅ All required tests are passing!"
+        fi
