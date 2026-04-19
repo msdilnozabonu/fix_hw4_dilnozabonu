@@ -28,9 +28,15 @@ func main() {
 	priceStr, _ := reader.ReadString('\n')
 	priceStr = strings.TrimSpace(priceStr)
 	priceStr = strings.ReplaceAll(priceStr, " ", "")
+
+	if !isValidPriceString(priceStr) {
+		fmt.Println("вы вели не правильную сумму")
+		return
+	}
+
 	price, err := strconv.ParseFloat(priceStr, 64)
 	if err != nil {
-		fmt.Println("вы ввели неправильную сумму")
+		fmt.Println("вы вели не правильную сумму")
 		return
 	}
 
@@ -45,10 +51,10 @@ func main() {
 	default:
 		inStock, err := strconv.ParseBool(stockStr)
 		if err != nil {
-			fmt.Println("Введите 0/1 или true/false")
-			return
+			productInfo.InStock = false
+		} else {
+			productInfo.InStock = inStock
 		}
-		productInfo.InStock = inStock
 	}
 	productInfo.Price = int(price * tiinToSum)
 
@@ -58,9 +64,32 @@ func main() {
 	fmt.Println(converted)
 }
 
+func isValidPriceString(s string) bool {
+	if s == "" {
+		return false
+	}
+	dotCount := 0
+	start := 0
+	if s[0] == '-' {
+		start = 1
+	}
+	if start == len(s) {
+		return false
+	}
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if c == '.' {
+			dotCount++
+			if dotCount > 1 {
+				return false
+			}
+		} else if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 const (
 	tiinToSum = 100
 )
-
-//10 000 000.99
-//10 000 000 99
